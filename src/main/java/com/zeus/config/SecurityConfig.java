@@ -1,16 +1,21 @@
 package com.zeus.config;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 
 import com.zeus.common.CustomAccessDeniedHandler;
+import com.zeus.common.CustomLoginSuccessHandler;
 
+import jakarta.servlet.DispatcherType;
 import lombok.extern.slf4j.Slf4j;
 
 @Configuration
@@ -19,28 +24,49 @@ import lombok.extern.slf4j.Slf4j;
 public class SecurityConfig {
 
 	@Bean
-	SecurityFilterChain filterChain(HttpSecurity http, AccessDeniedHandler accessDeniedHandler) throws Exception {
+	SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+		http.csrf(csrf -> csrf.disable()).authorizeHttpRequests(auth -> auth
+				// ✅ JSP forward + error 렌더링은 무조건 통과 (루프 방지 핵심)
+				.dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR).permitAll()
 
-		log.info("security config ...");
+				// ✅ 로그인/에러/정적 리소스 허용
+				.requestMatchers("/", "/login", "/logout", "/error", "/accessError").permitAll()
+				.requestMatchers("/css/**", "/js/**", "/images/**").permitAll()
 
-		http.csrf(csrf -> csrf.disable())
-				.authorizeHttpRequests(auth -> auth.requestMatchers("/board/list", "/notice/list").permitAll()
-						.requestMatchers("/board/register").hasRole("MEMBER").requestMatchers("/notice/register")
-						.hasRole("ADMIN").anyRequest().authenticated())
-				.formLogin(form -> form.permitAll()).exceptionHandling(ex -> ex.accessDeniedHandler(accessDeniedHandler) // ✅
-																															// 커스텀
-																															// 403
-																															// 처리
-				);
+				// ✅ 권한 규칙
+				.requestMatchers("/notice/register/**").hasRole("ADMIN").requestMatchers("/board/register/**")
+				.hasRole("MEMBER")
+
+				.anyRequest().authenticated())
+				.formLogin(form -> form.loginPage("/login").loginProcessingUrl("/login")
+						.successHandler(createAuthenticationSuccessHandler()).failureUrl("/login?error=true")
+						.permitAll())
+
+				// ⭐ 로그아웃 설정 추가
+				.logout(logout -> logout.logoutUrl("/logout") // POST /logout 요청 시 로그아웃
+						.logoutSuccessUrl("/") // 로그아웃 성공 후 이동
+						.invalidateHttpSession(true) // 세션 무효화
+						.deleteCookies("JSESSIONID") // 세션 쿠키 삭제
+						.permitAll())
+
+				.exceptionHandling(ex -> ex.accessDeniedHandler(accessDeniedHandler()));
 
 		return http.build();
 	}
 
-	@Autowired
-	protected void configure(AuthenticationManagerBuilder auth) throws Exception {
-		auth.inMemoryAuthentication().withUser("member").password("{noop}1234").roles("MEMBER");
+	// ✅ CustomLoginSuccessHandler를 빈으로 등록
+	@Bean
+	AuthenticationSuccessHandler createAuthenticationSuccessHandler() {
+		return new CustomLoginSuccessHandler();
+	}
 
-		auth.inMemoryAuthentication().withUser("admin").password("{noop}1234").roles("ADMIN", "MEMBER");
+	@Bean
+	UserDetailsService userDetailsService() {
+		UserDetails member = User.withUsername("member").password("{noop}1234").roles("MEMBER").build();
+
+		UserDetails admin = User.withUsername("admin").password("{noop}1234").roles("ADMIN", "MEMBER").build();
+
+		return new InMemoryUserDetailsManager(member, admin);
 	}
 
 	@Bean
